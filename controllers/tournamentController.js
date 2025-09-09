@@ -187,15 +187,60 @@ const updateMatchDetails = async (req, res) => {
     const match = tournament.matches.id(matchId);
     if (!match) return res.status(404).json({ message: "Match not found" });
 
-    // FIX: The frontend sends the ID as a string, not an object.
-    // Assign the ID string directly.
+    // Apply updates to the specific match
     if (teamAId) match.teamAId = teamAId;
     if (teamBId) match.teamBId = teamBId;
-    if (date) match.date = date;
-    if (time) match.time = time;
+    
+    // A check to see if date/time are passed in the body.
+    // This allows clearing the date/time by passing an empty string.
+    if (date !== undefined) match.date = date;
+    if (time !== undefined) match.time = time;
+    
+    // Re-sort and re-number all matches
+    const sortMatches = (a, b) => {
+        // Matches with no date (or empty string) go to the end
+        const aHasDate = a.date && a.date.length > 0;
+        const bHasDate = b.date && b.date.length > 0;
+
+        if (!aHasDate && bHasDate) return 1;
+        if (aHasDate && !bHasDate) return -1;
+        
+        // Sort by date if both exist
+        if (aHasDate && bHasDate) {
+            const dateComparison = a.date.localeCompare(b.date);
+            if (dateComparison !== 0) return dateComparison;
+        }
+
+        // If dates are same or both are null, sort by time
+        const aHasTime = a.time && a.time.length > 0;
+        const bHasTime = b.time && b.time.length > 0;
+
+        if (!aHasTime && bHasTime) return 1;
+        if (aHasTime && !bHasTime) return -1;
+
+        if (aHasTime && bHasTime) {
+            const timeComparison = a.time.localeCompare(b.time);
+            if (timeComparison !== 0) return timeComparison;
+        }
+
+        // As a final tie-breaker, use the original matchNumber for stability
+        // This is important for matches that have no date/time set.
+        return a.matchNumber - b.matchNumber;
+    };
+
+    // Extract, sort, and re-assign the matches array
+    let sortedMatches = [...tournament.matches].sort(sortMatches);
+
+    // Re-assign match numbers
+    sortedMatches.forEach((m, index) => {
+        m.matchNumber = index + 1;
+    });
+    
+    // Replace the old matches array with the newly sorted and numbered one.
+    tournament.matches = sortedMatches;
     
     await tournament.save();
-    res.json({ success: true, message: "Match updated" });
+    res.json({ success: true, message: "Match updated and schedule re-ordered" });
 };
 
 const startMatch = async (req, res) => {
