@@ -1,4 +1,3 @@
-// backend/controllers/tournamentController.js
 const Tournament = require('../models/tournamentModel');
 const Team = require('../models/teamModel');
 
@@ -16,7 +15,7 @@ const populateTournamentData = (query) => {
   }).populate({
     path: 'matches.teamAId matches.teamBId',
     model: 'Team',
-    populate: { // This nested populate is the fix.
+    populate: {
         path: 'members',
         model: 'User',
         select: '-dob'
@@ -95,6 +94,115 @@ const joinTournament = async (req, res) => {
         tournament.teams.push(teamId);
         await tournament.save();
         res.json({ success: true, message: 'Successfully joined tournament!', tournamentId: tournament._id });
+    } catch (error) {
+        res.status(500).json({ message: 'Server Error', error: error.message });
+    }
+};
+
+// @desc    Get tournament leaderboard
+// @route   GET /api/tournaments/:id/leaderboard
+// @access  Private
+const getLeaderboard = async (req, res) => {
+    try {
+        const tournament = await populateTournamentData(Tournament.findById(req.params.id));
+        if (!tournament) return res.status(404).json({ message: 'Tournament not found' });
+
+        const leaderboard = {};
+
+        // Helper function to normalize player identifier (ID or name)
+        const getPlayerKey = (id, name) => {
+            if (id) return `id:${id.toString()}`;
+            if (name && name.trim()) return `name:${name.trim().toLowerCase()}`;
+            return null;
+        };
+
+        // Aggregate stats for each match
+        tournament.matches.forEach(match => {
+            // Process goals
+            match.goals.forEach(goal => {
+                const scorerKey = getPlayerKey(goal.scorerId, goal.scorerName);
+                const assistKey = getPlayerKey(goal.assistId, goal.assistName);
+
+                if (scorerKey) {
+                    if (!leaderboard[scorerKey]) {
+                        leaderboard[scorerKey] = {
+                            playerId: goal.scorerId || null,
+                            playerName: goal.scorerName || (goal.scorerId && goal.scorerId.profile ? goal.scorerId.profile.name : null),
+                            goals: 0,
+                            assists: 0,
+                            yellowCards: 0,
+                            redCards: 0,
+                            playerOfTheMatchAwards: 0
+                        };
+                    }
+                    leaderboard[scorerKey].goals += goal.isOwnGoal ? 0 : 1;
+                }
+
+                if (assistKey) {
+                    if (!leaderboard[assistKey]) {
+                        leaderboard[assistKey] = {
+                            playerId: goal.assistId || null,
+                            playerName: goal.assistName || (goal.assistId && goal.assistId.profile ? goal.assistId.profile.name : null),
+                            goals: 0,
+                            assists: 0,
+                            yellowCards: 0,
+                            redCards: 0,
+                            playerOfTheMatchAwards: 0
+                        };
+                    }
+                    leaderboard[assistKey].assists += 1;
+                }
+            });
+
+            // Process cards
+            match.cards.forEach(card => {
+                const playerKey = getPlayerKey(card.playerId, card.playerName);
+                if (playerKey) {
+                    if (!leaderboard[playerKey]) {
+                        leaderboard[playerKey] = {
+                            playerId: card.playerId || null,
+                            playerName: card.playerName || (card.playerId && card.playerId.profile ? card.playerId.profile.name : null),
+                            goals: 0,
+                            assists: 0,
+                            yellowCards: 0,
+                            redCards: 0,
+                            playerOfTheMatchAwards: 0
+                        };
+                    }
+                    if (card.type.toLowerCase() === 'yellow') {
+                        leaderboard[playerKey].yellowCards += 1;
+                    } else if (card.type.toLowerCase() === 'red') {
+                        leaderboard[playerKey].redCards += 1;
+                    }
+                }
+            });
+
+            // Process player of the match
+            const potmKey = getPlayerKey(match.playerOfTheMatchId, match.playerOfTheMatchName);
+            if (potmKey) {
+                if (!leaderboard[potmKey]) {
+                    leaderboard[potmKey] = {
+                        playerId: match.playerOfTheMatchId || null,
+                        playerName: match.playerOfTheMatchName || (match.playerOfTheMatchId && match.playerOfTheMatchId.profile ? match.playerOfTheMatchId.profile.name : null),
+                        goals: 0,
+                        assists: 0,
+                        yellowCards: 0,
+                        redCards: 0,
+                        playerOfTheMatchAwards: 0
+                    };
+                }
+                leaderboard[potmKey].playerOfTheMatchAwards += 1;
+            }
+        });
+
+        // Convert leaderboard object to array and sort by goals, then assists, then player of the match awards
+        const leaderboardArray = Object.values(leaderboard).sort((a, b) => {
+            if (b.goals !== a.goals) return b.goals - a.goals;
+            if (b.assists !== a.assists) return b.assists - a.assists;
+            return b.playerOfTheMatchAwards - a.playerOfTheMatchAwards;
+        });
+
+        res.json({ success: true, leaderboard: leaderboardArray });
     } catch (error) {
         res.status(500).json({ message: 'Server Error', error: error.message });
     }
@@ -243,6 +351,21 @@ const updateMatchDetails = async (req, res) => {
     res.json({ success: true, message: "Match updated and schedule re-ordered" });
 };
 
+const deleteMatch = async (req, res) => {
+    const { matchId, id: tournamentId } = req.params;
+    const { error, status, tournament } = await checkAdmin(tournamentId, req.user._id);
+    if (error) return res.status(status).json({ message: error });
+
+    const match = tournament.matches.id(matchId);
+    if (!match) return res.status(404).json({ message: "Match not found" });
+
+    // Use the .remove() method on the subdocument
+    match.remove();
+    
+    await tournament.save();
+    res.json({ success: true, message: "Match deleted successfully" });
+};
+
 const startMatch = async (req, res) => {
     const { matchId, id: tournamentId } = req.params;
     const { error, status, tournament } = await checkAdmin(tournamentId, req.user._id);
@@ -281,51 +404,98 @@ const endMatch = async (req, res) => {
 };
 
 const recordGoal = async (req, res) => {
-    const { scorerId, assistId, isOwnGoal, benefitingTeamId } = req.body;
-    const { matchId, id: tournamentId } = req.params;
-    const { error, status, tournament } = await checkAdmin(tournamentId, req.user._id);
-    if (error) return res.status(status).json({ message: error });
+    try {
+        const { scorerId, scorerName, assistId, assistName, isOwnGoal, benefitingTeamId } = req.body;
+        const { matchId, id: tournamentId } = req.params;
+        const { error, status, tournament } = await checkAdmin(tournamentId, req.user._id);
+        if (error) return res.status(status).json({ message: error });
 
-    const match = tournament.matches.id(matchId);
-    if (!match) return res.status(404).json({ message: 'Match not found' });
+        const match = tournament.matches.id(matchId);
+        if (!match) return res.status(404).json({ message: 'Match not found' });
+        
+        if (!scorerId && (!scorerName || !scorerName.trim())) {
+            return res.status(400).json({ message: 'A scorer must be provided.' });
+        }
+        if (!benefitingTeamId) {
+            return res.status(400).json({ message: 'Benefiting team ID is required.' });
+        }
 
-    if (!benefitingTeamId) {
-        return res.status(400).json({ message: 'Benefiting team ID is required.' });
+        if (match.teamAId.equals(benefitingTeamId)) {
+            match.scoreA++;
+        } else if (match.teamBId.equals(benefitingTeamId)) {
+            match.scoreB++;
+        } else {
+            return res.status(400).json({ message: 'Benefiting team is not in this match.' });
+        }
+        
+        const newGoal = {
+            teamId: benefitingTeamId,
+            isOwnGoal: !!isOwnGoal,
+            minute: 0, // Placeholder
+            scorerId: null, // Explicitly default to null
+            assistId: null, // Explicitly default to null
+        };
+
+        if (scorerName && scorerName.trim()) {
+            newGoal.scorerName = scorerName.trim();
+        } else if (scorerId) {
+            newGoal.scorerId = scorerId;
+        }
+
+        if (assistName && assistName.trim()) {
+            newGoal.assistName = assistName.trim();
+        } else if (assistId) {
+            newGoal.assistId = assistId;
+        }
+
+        match.goals.push(newGoal);
+        await tournament.save();
+        res.json({ success: true, message: 'Goal recorded' });
+    } catch (err) {
+        res.status(400).json({ message: err.message || 'Failed to record goal' });
     }
-
-    if (match.teamAId.equals(benefitingTeamId)) {
-        match.scoreA++;
-    } else if (match.teamBId.equals(benefitingTeamId)) {
-        match.scoreB++;
-    } else {
-        return res.status(400).json({ message: 'Benefiting team is not in this match.' });
-    }
-
-    match.goals.push({ scorerId, assistId, isOwnGoal, teamId: benefitingTeamId, minute: 0 });
-    await tournament.save();
-    res.json({ success: true, message: 'Goal recorded' });
 };
 
 const recordCard = async (req, res) => {
-    const { playerId, cardType, teamId } = req.body;
-    const { matchId, id: tournamentId } = req.params;
-    const { error, status, tournament } = await checkAdmin(tournamentId, req.user._id);
-    if (error) return res.status(status).json({ message: error });
-    
-    const match = tournament.matches.id(matchId);
-    if (!match) return res.status(404).json({ message: "Match not found" });
+    try {
+        const { playerId, playerName, cardType, teamId } = req.body;
+        const { matchId, id: tournamentId } = req.params;
+        const { error, status, tournament } = await checkAdmin(tournamentId, req.user._id);
+        if (error) return res.status(status).json({ message: error });
+        
+        const match = tournament.matches.id(matchId);
+        if (!match) return res.status(404).json({ message: "Match not found" });
 
-    if (!match.teamAId.equals(teamId) && !match.teamBId.equals(teamId)) {
-        return res.status(400).json({ message: "Player's team is not in this match" });
+        if (!playerId && (!playerName || !playerName.trim())) {
+            return res.status(400).json({ message: 'A player must be provided.' });
+        }
+        if (!match.teamAId.equals(teamId) && !match.teamBId.equals(teamId)) {
+            return res.status(400).json({ message: "Player's team is not in this match" });
+        }
+
+        const newCard = {
+            type: cardType,
+            teamId: teamId,
+            minute: 0, // Placeholder
+            playerId: null, // Explicitly default to null
+        };
+
+        if (playerName && playerName.trim()) {
+            newCard.playerName = playerName.trim();
+        } else if (playerId) {
+            newCard.playerId = playerId;
+        }
+        
+        match.cards.push(newCard);
+        await tournament.save();
+        res.json({ success: true, message: "Card recorded" });
+    } catch (err) {
+        res.status(400).json({ message: err.message || 'Failed to record card' });
     }
-
-    match.cards.push({ playerId, type: cardType, teamId: teamId, minute: 0 });
-    await tournament.save();
-    res.json({ success: true, message: "Card recorded" });
 };
 
 const setPlayerOfTheMatch = async (req, res) => {
-    const { playerId } = req.body;
+    const { playerId, playerName } = req.body;
     const { matchId, id: tournamentId } = req.params;
     const { error, status, tournament } = await checkAdmin(tournamentId, req.user._id);
     if (error) return res.status(status).json({ message: error });
@@ -333,7 +503,20 @@ const setPlayerOfTheMatch = async (req, res) => {
     const match = tournament.matches.id(matchId);
     if (!match) return res.status(404).json({ message: "Match not found" });
 
-    match.playerOfTheMatchId = playerId;
+    const hasPlayerName = playerName && playerName.trim();
+
+    if (hasPlayerName) {
+        match.playerOfTheMatchName = playerName.trim();
+        match.playerOfTheMatchId = null;
+    } else if (playerId) {
+        match.playerOfTheMatchId = playerId;
+        match.playerOfTheMatchName = null;
+    } else {
+        // This allows clearing the POTM by sending empty/null values
+        match.playerOfTheMatchId = null;
+        match.playerOfTheMatchName = null;
+    }
+
     await tournament.save();
     res.json({ success: true, message: "Player of the Match set" });
 };
@@ -343,11 +526,13 @@ module.exports = {
   createTournament,
   getTournamentById,
   joinTournament,
+  getLeaderboard,
   updateTournament,
   addTeamToTournament,
   scheduleMatches,
   addMatchManually,
   updateMatchDetails,
+  deleteMatch,
   startMatch,
   endMatch,
   recordGoal,
