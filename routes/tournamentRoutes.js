@@ -10,6 +10,7 @@ const {
   scheduleMatches,
   addMatchManually,
   updateMatchDetails,
+  deleteMatch,
   startMatch,
   endMatch,
   recordGoal,
@@ -34,7 +35,7 @@ router.route('/:id/schedule').post(scheduleMatches);
 
 // Match-specific routes
 router.route('/:id/matches').post(addMatchManually);
-router.route('/:id/matches/:matchId').put(updateMatchDetails);
+router.route('/:id/matches/:matchId').put(updateMatchDetails).delete(deleteMatch);
 router.route('/:id/matches/:matchId/start').put(startMatch);
 router.route('/:id/matches/:matchId/end').put(endMatch);
 router.route('/:id/matches/:matchId/potm').put(setPlayerOfTheMatch);
