@@ -1,45 +1,19 @@
+// backend/models/tournamentModel.js
 const mongoose = require('mongoose');
 const { Schema } = mongoose;
 
 // --- Sub-document Schemas ---
 
 const goalSchema = new Schema({
-  scorerId: { 
-    type: Schema.Types.ObjectId, 
-    ref: 'User',
-    required: false,
-    default: null
-  },
-  scorerName: { 
-    type: String,
-    required: false
-  },
-  assistId: { 
-    type: Schema.Types.ObjectId, 
-    ref: 'User',
-    required: false,
-    default: null
-  },
-  assistName: { 
-    type: String,
-    required: false
-  },
+  scorerId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+  assistId: { type: Schema.Types.ObjectId, ref: 'User' },
   minute: { type: Number, required: true },
   isOwnGoal: { type: Boolean, default: false },
   teamId: { type: Schema.Types.ObjectId, ref: 'Team', required: true },
 });
 
 const cardSchema = new Schema({
-  playerId: { 
-    type: Schema.Types.ObjectId, 
-    ref: 'User',
-    required: false,
-    default: null
-  },
-  playerName: { 
-    type: String,
-    required: false
-  },
+  playerId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
   minute: { type: Number, required: true },
   type: { type: String, enum: ['Yellow', 'Red'], required: true },
   teamId: { type: Schema.Types.ObjectId, ref: 'Team', required: true },
@@ -49,12 +23,12 @@ const matchSchema = new Schema({
   matchNumber: { type: Number, required: true },
   teamAId: { type: Schema.Types.ObjectId, ref: 'Team', required: true },
   teamBId: { type: Schema.Types.ObjectId, ref: 'Team', required: true },
-  date: { type: String }, // Optional
-  time: { type: String }, // Optional
+  date: String,
+  time: String,
   scoreA: { type: Number, default: 0 },
   scoreB: { type: Number, default: 0 },
-  penaltyScoreA: { type: Number },
-  penaltyScoreB: { type: Number },
+  penaltyScoreA: Number,
+  penaltyScoreB: Number,
   status: { 
     type: String, 
     enum: ['Scheduled', 'Live', 'Finished'], 
@@ -64,17 +38,9 @@ const matchSchema = new Schema({
   cards: [cardSchema],
   round: { type: String, required: true },
   winnerId: { type: Schema.Types.ObjectId, ref: 'Team', default: null },
-  playerOfTheMatchId: { 
-    type: Schema.Types.ObjectId, 
-    ref: 'User',
-    required: false,
-    default: null
-  },
-  playerOfTheMatchName: { 
-    type: String,
-    required: false
-  },
+  playerOfTheMatchId: { type: Schema.Types.ObjectId, ref: 'User' },
 });
+
 
 // --- Main Tournament Schema ---
 
